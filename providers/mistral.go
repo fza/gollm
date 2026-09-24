@@ -121,24 +121,47 @@ func (p *MistralProvider) Headers() map[string]string {
 //   - Serialized JSON request body
 //   - Any error encountered during preparation
 func (p *MistralProvider) PrepareRequest(prompt string, options map[string]interface{}) ([]byte, error) {
+	messages := []map[string]interface{}{}
+	if systemPrompt, ok := mistralSystemPrompt(p.options, options); ok {
+		messages = append(messages, map[string]interface{}{"role": "system", "content": systemPrompt})
+	}
+	messages = append(messages, map[string]interface{}{"role": "user", "content": prompt})
+
 	requestBody := map[string]interface{}{
-		"model": p.model,
-		"messages": []map[string]interface{}{
-			{"role": "user", "content": prompt},
-		},
+		"model":    p.model,
+		"messages": messages,
 	}
 
 	// First, add the default options
 	for k, v := range p.options {
+		if k == "system_prompt" {
+			continue
+		}
 		requestBody[k] = v
 	}
 
 	// Then, add any additional options (which may override defaults)
 	for k, v := range options {
+		if k == "system_prompt" {
+			continue
+		}
 		requestBody[k] = v
 	}
 
 	return json.Marshal(requestBody)
+}
+
+// mistralSystemPrompt resolves the system prompt from the per-call options,
+// falling back to the provider defaults. The API rejects unknown body fields,
+// so the value travels as a system-role message and never as a field of its
+// own.
+func mistralSystemPrompt(defaults, options map[string]interface{}) (string, bool) {
+	for _, source := range []map[string]interface{}{options, defaults} {
+		if prompt, ok := source["system_prompt"].(string); ok && prompt != "" {
+			return prompt, true
+		}
+	}
+	return "", false
 }
 
 // PrepareRequestWithSchema creates a request that includes structured output formatting.
@@ -153,11 +176,15 @@ func (p *MistralProvider) PrepareRequest(prompt string, options map[string]inter
 //   - Serialized JSON request body
 //   - Any error encountered during preparation
 func (p *MistralProvider) PrepareRequestWithSchema(prompt string, options map[string]interface{}, schema interface{}) ([]byte, error) {
+	messages := []map[string]string{}
+	if systemPrompt, ok := mistralSystemPrompt(p.options, options); ok {
+		messages = append(messages, map[string]string{"role": "system", "content": systemPrompt})
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": prompt})
+
 	requestBody := map[string]interface{}{
-		"model": p.model,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
+		"model":    p.model,
+		"messages": messages,
 		"response_format": map[string]interface{}{
 			"type":   "json_schema",
 			"schema": schema,
@@ -166,6 +193,9 @@ func (p *MistralProvider) PrepareRequestWithSchema(prompt string, options map[st
 
 	// Add any additional options
 	for k, v := range options {
+		if k == "system_prompt" {
+			continue
+		}
 		requestBody[k] = v
 	}
 
