@@ -67,23 +67,38 @@ func TestParseRetryAfter(t *testing.T) {
 
 func TestParseProviderError(t *testing.T) {
 	cases := []struct {
-		name     string
-		body     string
-		wantType string
-		wantCode string
+		name string
+		body string
+		want providerErrorDetail
 	}{
-		{"anthropic rate limit", `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`, "rate_limit_error", ""},
-		{"openai insufficient quota", `{"error":{"message":"You exceeded your quota","type":"insufficient_quota","code":"insufficient_quota"}}`, "insufficient_quota", "insufficient_quota"},
-		{"empty body", ``, "", ""},
-		{"non-json body", `Bad Gateway`, "", ""},
+		{"anthropic rate limit", `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`, providerErrorDetail{Type: "rate_limit_error", Message: "slow down"}},
+		{"openai insufficient quota", `{"error":{"message":"You exceeded your quota","type":"insufficient_quota","code":"insufficient_quota"}}`, providerErrorDetail{Type: "insufficient_quota", Code: "insufficient_quota", Message: "You exceeded your quota"}},
+		{"openai-compatible model not capable", `{"error":{"message":"The model 'glm-5.3-flash' does not support JSON schema mode. Use 'json_object' mode instead","type":"invalid_request_error","code":"model_not_capable"}}`, providerErrorDetail{Type: "invalid_request_error", Code: "model_not_capable", Message: "The model 'glm-5.3-flash' does not support JSON schema mode. Use 'json_object' mode instead"}},
+		{"numeric code", `{"error":{"message":"bad","code":400}}`, providerErrorDetail{Message: "bad"}},
+		{"empty body", ``, providerErrorDetail{}},
+		{"non-json body", `Bad Gateway`, providerErrorDetail{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotType, gotCode := parseProviderError([]byte(c.body))
-			if gotType != c.wantType || gotCode != c.wantCode {
-				t.Errorf("parseProviderError(%q) = (%q, %q), want (%q, %q)", c.body, gotType, gotCode, c.wantType, c.wantCode)
+			if got := parseProviderError([]byte(c.body)); got != c.want {
+				t.Errorf("parseProviderError(%q) = %+v, want %+v", c.body, got, c.want)
 			}
 		})
+	}
+}
+
+func TestClassifyAPIErrorCarriesProviderDetail(t *testing.T) {
+	body := `{"error":{"message":"The model 'm' does not support JSON schema mode","type":"invalid_request_error","code":"model_not_capable"}}`
+	le := classifyAPIError(400, http.Header{}, []byte(body))
+	if le.ProviderCode != "model_not_capable" || le.ProviderType != "invalid_request_error" || le.ProviderMessage != "The model 'm' does not support JSON schema mode" {
+		t.Errorf("provider detail not carried: %+v", le)
+	}
+	want := "APIError: API error: status code 400: The model 'm' does not support JSON schema mode (model_not_capable)"
+	if got := le.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	if got := classifyAPIError(400, http.Header{}, nil).Error(); got != "APIError: API error: status code 400" {
+		t.Errorf("Error() without a body = %q", got)
 	}
 }
 

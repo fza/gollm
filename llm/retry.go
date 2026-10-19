@@ -22,11 +22,15 @@ import (
 //     permanent.
 //   - any other 4xx: permanent.
 func classifyAPIError(statusCode int, header http.Header, body []byte) *LLMError {
+	detail := parseProviderError(body)
 	le := &LLMError{
-		Type:       ErrorTypeAPI,
-		Message:    fmt.Sprintf("API error: status code %d", statusCode),
-		StatusCode: statusCode,
-		RetryAfter: parseRetryAfter(header),
+		Type:            ErrorTypeAPI,
+		Message:         fmt.Sprintf("API error: status code %d", statusCode),
+		StatusCode:      statusCode,
+		RetryAfter:      parseRetryAfter(header),
+		ProviderType:    detail.Type,
+		ProviderCode:    detail.Code,
+		ProviderMessage: detail.Message,
 	}
 
 	switch {
@@ -34,7 +38,7 @@ func classifyAPIError(statusCode int, header http.Header, body []byte) *LLMError
 		le.Type = ErrorTypeRateLimit
 		// insufficient_quota is a 429 that means the account is out of
 		// credits — retrying never recovers it.
-		if errType, errCode := parseProviderError(body); errType == "insufficient_quota" || errCode == "insufficient_quota" {
+		if detail.Type == "insufficient_quota" || detail.Code == "insufficient_quota" {
 			le.Message = "API error: insufficient quota"
 			le.Retryable = false
 		} else {
@@ -62,24 +66,36 @@ func classifyNetworkError(err error) *LLMError {
 	return &LLMError{Type: ErrorTypeRequest, Message: "failed to send request", Err: err, Retryable: true}
 }
 
+// providerErrorDetail is the typed error a provider reports in its response
+// body.
+type providerErrorDetail struct {
+	Type    string
+	Code    string
+	Message string
+}
+
 // parseProviderError reads the provider error envelope to extract the typed
-// error string. It tolerates both the Anthropic shape ({"error":{"type":...}})
-// and the OpenAI shape ({"error":{"type":...,"code":...}}). Missing or
-// unparseable bodies yield empty strings.
-func parseProviderError(body []byte) (errType, errCode string) {
+// error, its code and its message. It tolerates both the Anthropic shape
+// ({"error":{"type":...,"message":...}}) and the OpenAI shape
+// ({"error":{"type":...,"code":...,"message":...}}). Missing or unparseable
+// bodies, and codes that are not strings, yield empty fields.
+func parseProviderError(body []byte) providerErrorDetail {
 	if len(body) == 0 {
-		return "", ""
+		return providerErrorDetail{}
 	}
 	var env struct {
 		Error struct {
-			Type string `json:"type"`
-			Code string `json:"code"`
+			Type    string          `json:"type"`
+			Code    json.RawMessage `json:"code"`
+			Message string          `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
-		return "", ""
+		return providerErrorDetail{}
 	}
-	return env.Error.Type, env.Error.Code
+	var code string
+	_ = json.Unmarshal(env.Error.Code, &code)
+	return providerErrorDetail{Type: env.Error.Type, Code: code, Message: env.Error.Message}
 }
 
 // parseRetryAfter extracts a server-provided wait hint from rate-limit
