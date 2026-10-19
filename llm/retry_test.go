@@ -282,6 +282,29 @@ func TestGeneratePermanentFailsFast(t *testing.T) {
 	}
 }
 
+type recordingLogger struct {
+	utils.Logger
+	errors []string
+}
+
+func (r *recordingLogger) Error(msg string, _ ...interface{}) { r.errors = append(r.errors, msg) }
+
+func TestGeneratePermanentFailureLeavesNoErrorLog(t *testing.T) {
+	rt := &scriptedRT{steps: []func() (*http.Response, error){
+		resp(400, `{"error":{"message":"The model does not support JSON schema mode","code":"model_not_capable"}}`),
+	}}
+	l := newTestLLM(rt)
+	logger := &recordingLogger{Logger: utils.NewLogger(utils.LogLevelOff)}
+	l.logger = logger
+
+	if _, err := l.Generate(context.Background(), &Prompt{Input: "hi"}); err == nil {
+		t.Fatal("expected the permanent error to be returned")
+	}
+	if len(logger.errors) != 0 {
+		t.Errorf("a returned permanent error should not also be logged as an error, got %v", logger.errors)
+	}
+}
+
 func TestGenerateInsufficientQuotaFailsFast(t *testing.T) {
 	rt := &scriptedRT{steps: []func() (*http.Response, error){
 		resp(429, `{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}`),

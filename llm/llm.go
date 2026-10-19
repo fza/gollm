@@ -328,7 +328,10 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 			// Transient — log quietly so a batch of retries does not flood.
 			l.logger.Debug("Retryable API error", "provider", l.Provider.Name(), "status", resp.StatusCode, "retry_after", apiErr.RetryAfter.String())
 		} else {
-			l.logger.Error("API error", "provider", l.Provider.Name(), "status", resp.StatusCode, "body", string(body))
+			// Permanent — the returned error carries the provider's code and
+			// message, so the caller decides whether it is worth reporting; a
+			// caller that recovers from it must not leave an error in the log.
+			l.logger.Debug("API error", "provider", l.Provider.Name(), "status", resp.StatusCode, "body", string(body))
 		}
 		return nil, apiErr
 	}
