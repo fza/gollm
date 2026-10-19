@@ -156,3 +156,48 @@ func TestOpenAIEndpointFromConfig(t *testing.T) {
 
 	assert.Equal(t, "https://gateway.example/openai/v1/chat/completions", provider.Endpoint())
 }
+
+// TestSystemPromptRole verifies that the system prompt goes out as a developer
+// message to OpenAI's own endpoint and as a system message to any other
+// OpenAI-compatible endpoint, with the provider options passed through as set.
+func TestSystemPromptRole(t *testing.T) {
+	testCases := []struct {
+		name         string
+		endpoint     string
+		expectedRole string
+	}{
+		{name: "unset endpoint", endpoint: "", expectedRole: "developer"},
+		{name: "OpenAI base URL", endpoint: "https://api.openai.com/v1", expectedRole: "developer"},
+		{name: "OpenAI full path", endpoint: "https://api.openai.com/v1/chat/completions", expectedRole: "developer"},
+		{name: "OpenAI host in upper case", endpoint: "https://API.OpenAI.com", expectedRole: "developer"},
+		{name: "melious", endpoint: "https://api.melious.ai/v1/chat/completions", expectedRole: "system"},
+		{name: "gateway", endpoint: "https://gateway.example/openai", expectedRole: "system"},
+		{name: "OpenAI host as a subdomain elsewhere", endpoint: "https://api.openai.com.gateway.example/v1", expectedRole: "system"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := NewOpenAIProvider("fake-api-key", "glm-5.3-flash", nil).(*OpenAIProvider)
+			provider.SetEndpoint(tc.endpoint)
+			provider.SetOption("reasoning_effort", "medium")
+
+			body, err := provider.PrepareRequest("hello", map[string]interface{}{"system_prompt": "be terse"})
+			assert.NoError(t, err)
+
+			var req struct {
+				Messages []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+				ReasoningEffort string `json:"reasoning_effort"`
+			}
+			assert.NoError(t, json.Unmarshal(body, &req))
+
+			if assert.Len(t, req.Messages, 2, "request should carry the system prompt and the user prompt") {
+				assert.Equal(t, tc.expectedRole, req.Messages[0].Role, "system prompt role should follow the endpoint")
+				assert.Equal(t, "be terse", req.Messages[0].Content, "system prompt should be sent unchanged")
+			}
+			assert.Equal(t, "medium", req.ReasoningEffort, "provider options should reach the request unchanged")
+		})
+	}
+}
