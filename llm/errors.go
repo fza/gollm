@@ -181,3 +181,31 @@ func HandleError(err error, fatal bool, logger utils.Logger) {
 		panic(err)
 	}
 }
+
+// NoAnswerError reports a response the provider delivered whole that holds no
+// answer the provider could parse: typically a reasoning model that spent the
+// output token cap thinking. It carries why the model stopped and what it
+// spent, so a caller can tell a cap from a provider fault.
+type NoAnswerError struct {
+	FinishReason string
+	// Usage is nil when the provider reported none.
+	Usage *Usage
+	Err   error
+}
+
+func (e *NoAnswerError) Error() string {
+	reasoning := 0
+	if e.Usage != nil {
+		reasoning = e.Usage.ReasoningTokens
+	}
+	return fmt.Sprintf("%v (finish_reason=%s, reasoning %d tokens)", e.Err, e.FinishReason, reasoning)
+}
+
+func (e *NoAnswerError) Unwrap() error {
+	return e.Err
+}
+
+// Truncated reports whether the model stopped at the output token cap.
+func (e *NoAnswerError) Truncated() bool {
+	return finishedAtCap(e.FinishReason)
+}

@@ -9,9 +9,24 @@ import (
 // Response represents a structured response from an LLM.
 // It contains the text content, any tool calls, and usage information.
 type Response struct {
-	Content   string            // The text content of the response
-	ToolCalls []types.ToolCall  // Tool calls requested by the LLM (if any)
-	Usage     *Usage            // Token usage information (if available)
+	Content   string           // The text content of the response
+	ToolCalls []types.ToolCall // Tool calls requested by the LLM (if any)
+	Usage     *Usage           // Token usage information (if available)
+
+	// FinishReason is why the model stopped, as the provider names it:
+	// OpenAI's finish_reason, Anthropic's stop_reason, Ollama's done_reason.
+	// Empty when the provider reports none.
+	FinishReason string
+}
+
+// Truncated reports whether the model stopped at the output token cap, so the
+// content is cut short or, for a reasoning model, may be missing entirely.
+func (r *Response) Truncated() bool {
+	return finishedAtCap(r.FinishReason)
+}
+
+func finishedAtCap(finishReason string) bool {
+	return finishReason == "length" || finishReason == "max_tokens"
 }
 
 // Usage contains token usage statistics for a response.
@@ -35,6 +50,9 @@ type Usage struct {
 	// CostUSD is the call's cost as the provider reports it in the usage
 	// object (a gateway such as Opper does); zero when none is reported.
 	CostUSD float64 `json:"cost"`
+	// ReasoningTokens is the share of the completion a reasoning model spent
+	// thinking. It counts against the same output cap as the answer.
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // HasToolCalls returns true if the response contains tool calls.
