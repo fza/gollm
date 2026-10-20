@@ -361,12 +361,36 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 		l.logger.Debug("Cache information not available in the response")
 	}
 
+	usage := usageFromResponseMap(fullResponse)
+	finishReason := finishReasonFromResponseMap(fullResponse)
 	result, err := l.Provider.ParseResponse(body)
 	if err != nil {
+		if finishReason != "" {
+			err = &NoAnswerError{FinishReason: finishReason, Usage: usage, Err: err}
+		}
 		return nil, NewLLMError(ErrorTypeResponse, "failed to parse response", err)
 	}
 	l.logger.Debug("Text generated successfully", "result", result)
-	return &Response{Content: result, Usage: usageFromResponseMap(fullResponse)}, nil
+	return &Response{Content: result, Usage: usage, FinishReason: finishReason}, nil
+}
+
+// finishReasonFromResponseMap reads why the model stopped from a decoded
+// provider response: OpenAI's choices[0].finish_reason, Anthropic's
+// stop_reason or Ollama's done_reason.
+func finishReasonFromResponseMap(full map[string]interface{}) string {
+	if choices, ok := full["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if reason, ok := choice["finish_reason"].(string); ok {
+				return reason
+			}
+		}
+	}
+	for _, key := range []string{"stop_reason", "done_reason"} {
+		if reason, ok := full[key].(string); ok {
+			return reason
+		}
+	}
+	return ""
 }
 
 // usageFromResponseMap extracts token usage from a decoded provider response.
@@ -398,6 +422,13 @@ func usageFromResponseMap(full map[string]interface{}) *Usage {
 		if u.CacheReadInputTokens == 0 {
 			if details, ok := raw["prompt_tokens_details"].(map[string]interface{}); ok {
 				u.CacheReadInputTokens = geti(details, "cached_tokens")
+			}
+		}
+		// Chat Completions nests reasoning under completion_tokens_details,
+		// the Responses API under output_tokens_details.
+		for _, key := range []string{"completion_tokens_details", "output_tokens_details"} {
+			if details, ok := raw[key].(map[string]interface{}); ok && u.ReasoningTokens == 0 {
+				u.ReasoningTokens = geti(details, "reasoning_tokens")
 			}
 		}
 		return u
