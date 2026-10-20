@@ -92,3 +92,64 @@ func TestFinishReasonFromResponseMap(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateWithUsageCarriesBillingCost(t *testing.T) {
+	testCases := []struct {
+		description string
+		body        string
+		want        string
+	}{
+		{
+			description: "billing cost kept verbatim",
+			body:        `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":19,"completion_tokens":21},"billing_cost":{"energy":"0.103","credits":"0.0000103","paid_with":"energy"}}`,
+			want:        `{"energy":"0.103","credits":"0.0000103","paid_with":"energy"}`,
+		},
+		{
+			description: "billing cost without a usage object",
+			body:        `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"billing_cost":{"energy":1.5e-3}}`,
+			want:        `{"energy":1.5e-3}`,
+		},
+		{
+			description: "no billing cost",
+			body:        `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":19}}`,
+		},
+		{
+			description: "billing cost that is not an object",
+			body:        `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":19},"billing_cost":null}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			rt := &scriptedRT{steps: []func() (*http.Response, error){resp(200, tc.body)}}
+
+			got, err := newOpenAITestLLM(rt).GenerateWithUsage(context.Background(), &Prompt{Input: "hi"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var billingCost string
+			if got.Usage != nil {
+				billingCost = string(got.Usage.BillingCost)
+			}
+			if billingCost != tc.want {
+				t.Errorf("the billing cost should be the provider's object as sent, got %q", billingCost)
+			}
+		})
+	}
+}
+
+func TestGenerateWithUsageCarriesBillingCostOnNoAnswer(t *testing.T) {
+	rt := &scriptedRT{steps: []func() (*http.Response, error){
+		resp(200, `{"choices":[{"message":{"content":""},"finish_reason":"length"}],"usage":{"completion_tokens":64},"billing_cost":{"energy":"0.2"}}`),
+	}}
+
+	_, err := newOpenAITestLLM(rt).GenerateWithUsage(context.Background(), &Prompt{Input: "hi"})
+
+	var noAnswer *NoAnswerError
+	if !errors.As(err, &noAnswer) {
+		t.Fatalf("an empty answer should surface as a NoAnswerError, got %v", err)
+	}
+	if string(noAnswer.Usage.BillingCost) != `{"energy":"0.2"}` {
+		t.Errorf("a billed reply without an answer should still carry its cost, got %q", noAnswer.Usage.BillingCost)
+	}
+}
