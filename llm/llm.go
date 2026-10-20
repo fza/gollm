@@ -362,6 +362,12 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 	}
 
 	usage := usageFromResponseMap(fullResponse)
+	if billingCost := billingCostFromBody(body); billingCost != nil {
+		if usage == nil {
+			usage = &Usage{}
+		}
+		usage.BillingCost = billingCost
+	}
 	finishReason := finishReasonFromResponseMap(fullResponse)
 	result, err := l.Provider.ParseResponse(body)
 	if err != nil {
@@ -391,6 +397,26 @@ func finishReasonFromResponseMap(full map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+// billingCostFromBody returns the top-level billing_cost object of a response
+// as the provider wrote it, or nil when there is none. It decodes the body
+// again rather than re-encoding the generic map, which would reorder the keys
+// and reformat the numbers.
+func billingCostFromBody(body []byte) json.RawMessage {
+	var envelope struct {
+		BillingCost json.RawMessage `json:"billing_cost"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		lines := bytes.Split(bytes.TrimSpace(body), []byte("\n"))
+		if err := json.Unmarshal(lines[len(lines)-1], &envelope); err != nil {
+			return nil
+		}
+	}
+	if !bytes.HasPrefix(envelope.BillingCost, []byte("{")) {
+		return nil
+	}
+	return envelope.BillingCost
 }
 
 // usageFromResponseMap extracts token usage from a decoded provider response.

@@ -50,6 +50,11 @@ type Usage struct {
 	// ReasoningTokens is the share of the completion a reasoning model spent
 	// thinking. It counts against the same output cap as the answer.
 	ReasoningTokens int `json:"reasoning_tokens"`
+
+	// BillingCost is the provider's top-level billing_cost object, verbatim,
+	// from providers that bill per reply (melious.ai reports energy and
+	// credits). Kept raw because its fields and units are the provider's own.
+	BillingCost json.RawMessage `json:"billing_cost,omitempty"`
 }
 
 // HasToolCalls returns true if the response contains tool calls.
