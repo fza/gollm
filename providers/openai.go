@@ -96,7 +96,11 @@ func (p *OpenAIProvider) SetDefaultOptions(config *config.Config) {
 	if config.TemperatureSet {
 		p.SetOption("temperature", config.Temperature)
 	}
-	p.SetOption("max_tokens", config.MaxTokens)
+	// No cap at all leaves the model's own output limit in force, which a
+	// reasoning model needs: its thinking counts against the same cap.
+	if config.MaxTokens > 0 {
+		p.SetOption("max_tokens", config.MaxTokens)
+	}
 	if config.Seed != nil {
 		p.SetOption("seed", *config.Seed)
 	}
