@@ -86,6 +86,7 @@ var (
 	// Generation parameters
 	SetTemperature      = config.SetTemperature      // Controls randomness in generation (0.0-1.0)
 	SetMaxTokens        = config.SetMaxTokens        // Sets maximum tokens to generate
+	SetNoMaxTokens      = config.SetNoMaxTokens      // Sends no output cap where the provider allows it
 	SetTopP             = config.SetTopP             // Controls nucleus sampling
 	SetFrequencyPenalty = config.SetFrequencyPenalty // Penalizes frequent token usage
 	SetPresencePenalty  = config.SetPresencePenalty  // Penalizes repeated tokens

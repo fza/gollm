@@ -224,6 +224,16 @@ func SetMaxTokens(maxTokens int) ConfigOption {
 	}
 }
 
+// SetNoMaxTokens sends no output cap where the provider allows it (OpenAI),
+// leaving the model's own output limit in force: a reasoning model spends its
+// thinking against the same cap as its answer. A provider requiring a cap,
+// such as Anthropic, needs SetMaxTokens instead.
+func SetNoMaxTokens() ConfigOption {
+	return func(c *Config) {
+		c.MaxTokens = 0
+	}
+}
+
 // SetTimeout sets the request timeout duration.
 func SetTimeout(timeout time.Duration) ConfigOption {
 	return func(c *Config) {
