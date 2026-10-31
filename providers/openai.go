@@ -264,36 +264,10 @@ func (p *OpenAIProvider) PrepareRequest(prompt string, options map[string]interf
 func (p *OpenAIProvider) PrepareRequestWithSchema(prompt string, options map[string]interface{}, schema interface{}) ([]byte, error) {
 	p.logger.Debug("Preparing request with schema", "prompt", prompt, "schema", schema)
 
-	// First, ensure we have a proper object for the schema
-	var schemaObj interface{}
-	switch s := schema.(type) {
-	case string:
-		if err := json.Unmarshal([]byte(s), &schemaObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schema string: %w", err)
-		}
-	case []byte:
-		if err := json.Unmarshal(s, &schemaObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schema bytes: %w", err)
-		}
-	case map[string]interface{}:
-		schemaObj = s
-	default:
-		// Try to marshal and unmarshal to ensure we have a proper object
-		schemaBytes, err := json.Marshal(schema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal schema: %w", err)
-		}
-		if err := json.Unmarshal(schemaBytes, &schemaObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
-		}
+	cleanSchema, err := openAISchema(schema)
+	if err != nil {
+		return nil, err
 	}
-
-	// Clean the schema for OpenAI by removing unsupported validation rules
-	cleanSchema := cleanSchemaForOpenAI(schemaObj)
-
-	// Debug log the cleaned schema
-	cleanSchemaJSON, _ := json.MarshalIndent(cleanSchema, "", "  ")
-	p.logger.Debug("Cleaned schema for OpenAI", "schema", string(cleanSchemaJSON))
 
 	request := map[string]interface{}{
 		"model": p.model,
@@ -349,6 +323,42 @@ func (p *OpenAIProvider) PrepareRequestWithSchema(prompt string, options map[str
 
 	p.logger.Debug("Full request to OpenAI", "request", string(reqJSON))
 	return reqJSON, nil
+}
+
+// openAISchema prepares a schema for strict mode. A json.RawMessage is sent
+// verbatim, so its property order survives; other forms are decoded and
+// cleaned to the subset strict mode accepts.
+func openAISchema(schema interface{}) (interface{}, error) {
+	if raw, ok := schema.(json.RawMessage); ok {
+		return rawSchema(raw)
+	}
+
+	// First, ensure we have a proper object for the schema
+	var schemaObj interface{}
+	switch s := schema.(type) {
+	case string:
+		if err := json.Unmarshal([]byte(s), &schemaObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schema string: %w", err)
+		}
+	case []byte:
+		if err := json.Unmarshal(s, &schemaObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schema bytes: %w", err)
+		}
+	case map[string]interface{}:
+		schemaObj = s
+	default:
+		// Try to marshal and unmarshal to ensure we have a proper object
+		schemaBytes, err := json.Marshal(schema)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal schema: %w", err)
+		}
+		if err := json.Unmarshal(schemaBytes, &schemaObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
+		}
+	}
+
+	// Clean the schema for OpenAI by removing unsupported validation rules
+	return cleanSchemaForOpenAI(schemaObj), nil
 }
 
 // cleanSchemaForOpenAI removes validation rules that OpenAI doesn't support

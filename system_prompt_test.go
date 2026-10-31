@@ -15,13 +15,15 @@ import (
 )
 
 // wireProvider names a provider whose request carries the system prompt in a
-// slot of its own, and how to read that slot and the user content back.
+// slot of its own, and how to read that slot, the user content and the
+// response schema back. Its response reports usage as 11 in, 22 out.
 type wireProvider struct {
 	name     string
 	opts     func(url string) []gollm.ConfigOption
-	response string
+	response func(text string) string
 	system   func(t *testing.T, body map[string]any) string
 	user     func(t *testing.T, body map[string]any) string
+	schema   func(t *testing.T, body map[string]any) any
 }
 
 var wireProviders = []wireProvider{
@@ -30,12 +32,25 @@ var wireProviders = []wireProvider{
 		opts: func(url string) []gollm.ConfigOption {
 			return []gollm.ConfigOption{gollm.SetProvider("openai"), gollm.SetOpenAIEndpoint(url)}
 		},
-		response: `{"choices":[{"message":{"content":"ok"}}]}`,
+		response: func(text string) string {
+			return `{"choices":[{"message":{"content":` + jsonString(text) + `}}],"usage":{"prompt_tokens":11,"completion_tokens":22}}`
+		},
 		system: func(t *testing.T, body map[string]any) string {
 			return messageContent(t, body, "system", "developer")
 		},
 		user: func(t *testing.T, body map[string]any) string {
 			return messageContent(t, body, "user")
+		},
+		schema: func(t *testing.T, body map[string]any) any {
+			format := asMap(t, body["response_format"])
+			if format["type"] != "json_schema" {
+				t.Errorf("response_format.type = %v, want json_schema", format["type"])
+			}
+			js := asMap(t, format["json_schema"])
+			if js["strict"] != true {
+				t.Errorf("json_schema.strict = %v, want true", js["strict"])
+			}
+			return js["schema"]
 		},
 	},
 	{
@@ -43,7 +58,16 @@ var wireProviders = []wireProvider{
 		opts: func(url string) []gollm.ConfigOption {
 			return []gollm.ConfigOption{gollm.SetProvider("anthropic"), gollm.SetAnthropicEndpoint(url)}
 		},
-		response: `{"content":[{"type":"text","text":"ok"}]}`,
+		response: func(text string) string {
+			return `{"content":[{"type":"text","text":` + jsonString(text) + `}],"usage":{"input_tokens":11,"output_tokens":22}}`
+		},
+		schema: func(t *testing.T, body map[string]any) any {
+			format := asMap(t, asMap(t, body["output_config"])["format"])
+			if format["type"] != "json_schema" {
+				t.Errorf("output_config.format.type = %v, want json_schema", format["type"])
+			}
+			return format["schema"]
+		},
 		system: func(t *testing.T, body map[string]any) string {
 			var parts []string
 			for _, block := range asSlice(t, body["system"]) {
@@ -63,6 +87,47 @@ var wireProviders = []wireProvider{
 			return strings.Join(parts, "")
 		},
 	},
+	{
+		name: "ollama",
+		opts: func(url string) []gollm.ConfigOption {
+			return []gollm.ConfigOption{gollm.SetProvider("ollama"), gollm.SetOllamaEndpoint(url)}
+		},
+		response: func(text string) string {
+			return `{"model":"m","response":` + jsonString(text) + `,"done":true,"prompt_eval_count":11,"eval_count":22}`
+		},
+		system: func(t *testing.T, body map[string]any) string {
+			s, _ := body["system"].(string)
+			return s
+		},
+		user: func(t *testing.T, body map[string]any) string {
+			s, _ := body["prompt"].(string)
+			return s
+		},
+		schema: func(t *testing.T, body map[string]any) any {
+			return body["format"]
+		},
+	},
+}
+
+// wireServer serves the provider's response to every generation request and
+// answers Ollama's endpoint probe, which is not one.
+func wireServer(t *testing.T, handle func(w http.ResponseWriter, raw []byte)) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			_, _ = w.Write([]byte(`{"models":[]}`))
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		handle(w, raw)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func newWireLLM(t *testing.T, p wireProvider, url string, extra ...gollm.ConfigOption) gollm.LLM {
@@ -84,11 +149,10 @@ func TestSystemPromptSentOnceInSystemSlot(t *testing.T) {
 	for _, p := range wireProviders {
 		t.Run(p.name, func(t *testing.T) {
 			var raw []byte
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				raw, _ = io.ReadAll(r.Body)
-				_, _ = w.Write([]byte(p.response))
-			}))
-			defer srv.Close()
+			srv := wireServer(t, func(w http.ResponseWriter, body []byte) {
+				raw = body
+				_, _ = w.Write([]byte(p.response("ok")))
+			})
 
 			llm := newWireLLM(t, p, srv.URL)
 			prompt := gollm.NewPrompt("USER-MARK", gollm.WithSystemPrompt("SYS-MARK", gollm.CacheTypeEphemeral))
@@ -127,8 +191,7 @@ func TestOverlappingCallsKeepTheirSystemPrompts(t *testing.T) {
 			secondArrived := make(chan struct{})
 			var heldFirst bool
 
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				raw, _ := io.ReadAll(r.Body)
+			srv := wireServer(t, func(w http.ResponseWriter, raw []byte) {
 				var body map[string]any
 				if err := json.Unmarshal(raw, &body); err != nil {
 					t.Errorf("request body: %v", err)
@@ -156,12 +219,11 @@ func TestOverlappingCallsKeepTheirSystemPrompts(t *testing.T) {
 					w.WriteHeader(http.StatusServiceUnavailable)
 				case user == "USER-B":
 					close(secondArrived)
-					_, _ = w.Write([]byte(p.response))
+					_, _ = w.Write([]byte(p.response("ok")))
 				default:
-					_, _ = w.Write([]byte(p.response))
+					_, _ = w.Write([]byte(p.response("ok")))
 				}
-			}))
-			defer srv.Close()
+			})
 
 			llm := newWireLLM(t, p, srv.URL, gollm.SetMaxRetries(1), gollm.SetRetryDelay(time.Millisecond))
 

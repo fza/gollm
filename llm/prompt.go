@@ -199,6 +199,21 @@ func WithJSONSchemaValidation() GenerateOption {
 	}
 }
 
+// WithResponseSchema constrains the response to a JSON schema through the
+// provider's native structured output, on the regular request path: the
+// system prompt, retries and usage stay as for any call. A provider without
+// native support fails the call with ErrorTypeUnsupported instead of asking
+// for JSON in the prompt.
+//
+// Pass the schema as json.RawMessage to have it sent byte for byte: its
+// property order survives, and constrained decoding generates properties in
+// that order.
+func WithResponseSchema(schema interface{}) GenerateOption {
+	return func(c *GenerateConfig) {
+		c.ResponseSchema = schema
+	}
+}
+
 // WithExamples adds example conversations or outputs to guide the LLM.
 // If a single example ends with .txt or .jsonl, it's treated as a file path.
 //

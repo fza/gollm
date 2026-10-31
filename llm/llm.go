@@ -86,7 +86,8 @@ type GenerateOption func(*GenerateConfig)
 
 // GenerateConfig holds configuration options for text generation.
 type GenerateConfig struct {
-	UseJSONSchema bool // Whether to use JSON schema validation
+	UseJSONSchema  bool        // Whether to use JSON schema validation
+	ResponseSchema interface{} // JSON schema the response must conform to (WithResponseSchema)
 }
 
 // NewLLM creates a new LLM instance with the specified configuration.
@@ -200,11 +201,14 @@ func (l *LLMImpl) generate(ctx context.Context, prompt *Prompt, opts ...Generate
 	for _, opt := range opts {
 		opt(config)
 	}
+	if config.ResponseSchema != nil && !l.Provider.SupportsJSONSchema() {
+		return nil, NewLLMError(ErrorTypeUnsupported, fmt.Sprintf("provider %s cannot enforce a response schema", l.Provider.Name()), nil)
+	}
 	var lastErr error
 	for attempt := 0; attempt <= l.MaxRetries; attempt++ {
 		l.logger.Debug("Generating text", "provider", l.Provider.Name(), "prompt", prompt.String(), "system_prompt", prompt.SystemPrompt, "attempt", attempt+1)
 		// Pass the entire Prompt struct to attemptGenerate
-		resp, err := l.attemptGenerate(ctx, prompt)
+		resp, err := l.attemptGenerate(ctx, prompt, config.ResponseSchema)
 		if err == nil {
 			return resp, nil
 		}
@@ -232,7 +236,7 @@ func (l *LLMImpl) generate(ctx context.Context, prompt *Prompt, opts ...Generate
 //   - ErrorTypeAPI for provider API errors
 //   - ErrorTypeResponse for response processing issues
 //   - ErrorTypeRateLimit if provider rate limit is exceeded
-func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Response, error) {
+func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt, responseSchema interface{}) (*Response, error) {
 	// Create a new options map that includes both l.Options and prompt-specific options
 	options := make(map[string]interface{})
 
@@ -272,7 +276,9 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 	l.optionsMutex.RUnlock()
 
 	// Check if we have structured messages
-	if hasStructuredMessages {
+	if responseSchema != nil {
+		reqBody, err = l.Provider.PrepareRequestWithSchema(input, options, responseSchema)
+	} else if hasStructuredMessages {
 		// Use the structured messages API if the provider supports it
 		if prepareWithMessages, ok := l.Provider.(interface {
 			PrepareRequestWithMessages(messages []types.MemoryMessage, options map[string]interface{}) ([]byte, error)

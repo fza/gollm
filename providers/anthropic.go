@@ -151,6 +151,12 @@ func (p *AnthropicProvider) Headers() map[string]string {
 //   - Serialized JSON request body
 //   - Any error encountered during preparation
 func (p *AnthropicProvider) PrepareRequest(prompt string, options map[string]interface{}) ([]byte, error) {
+	return json.Marshal(p.requestBody(prompt, options))
+}
+
+// requestBody builds the Messages API request PrepareRequest and
+// PrepareRequestWithSchema send.
+func (p *AnthropicProvider) requestBody(prompt string, options map[string]interface{}) map[string]interface{} {
 	requestBody := map[string]interface{}{
 		"model":      p.model,
 		"max_tokens": p.options["max_tokens"],
@@ -255,7 +261,7 @@ func (p *AnthropicProvider) PrepareRequest(prompt string, options map[string]int
 		}
 	}
 
-	return json.Marshal(requestBody)
+	return requestBody
 }
 
 // Helper function to split the system prompt into a maximum of n parts
@@ -289,41 +295,21 @@ func splitSystemPrompt(prompt string, n int) []string {
 	return result
 }
 
-// PrepareRequestWithSchema creates a request that includes structured output formatting.
-// This uses Anthropic's system prompts to enforce response structure.
-//
-// Parameters:
-//   - prompt: The input text or conversation
-//   - options: Additional request parameters
-//   - schema: JSON schema for response validation
-//
-// Returns:
-//   - Serialized JSON request body
-//   - Any error encountered during preparation
+// PrepareRequestWithSchema creates the request PrepareRequest does, system
+// prompt and caching included, constrained to the schema through Anthropic's
+// native structured output (output_config.format).
 func (p *AnthropicProvider) PrepareRequestWithSchema(prompt string, options map[string]interface{}, schema interface{}) ([]byte, error) {
-	schemaJSON, err := json.MarshalIndent(schema, "", "  ")
+	raw, err := rawSchema(schema)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal schema: %w", err)
+		return nil, err
 	}
-
-	// Create a system message that enforces the JSON schema
-	systemMsg := fmt.Sprintf("You must respond with a JSON object that strictly adheres to this schema:\n%s\nDo not include any explanatory text, only output valid JSON.", string(schemaJSON))
-
-	requestBody := map[string]interface{}{
-		"model":  p.model,
-		"system": systemMsg,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
+	requestBody := p.requestBody(prompt, options)
+	outputConfig, _ := requestBody["output_config"].(map[string]interface{})
+	if outputConfig == nil {
+		outputConfig = map[string]interface{}{}
 	}
-
-	// Add any additional options
-	for k, v := range options {
-		if k != "system_prompt" { // Skip system_prompt as we're using it for schema
-			requestBody[k] = v
-		}
-	}
-
+	outputConfig["format"] = map[string]interface{}{"type": "json_schema", "schema": raw}
+	requestBody["output_config"] = outputConfig
 	return json.Marshal(requestBody)
 }
 
