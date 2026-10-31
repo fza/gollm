@@ -59,10 +59,7 @@ type Config struct {
 	OpenAIEndpoint        string            `env:"OPENAI_ENDPOINT" validate:"omitempty,url"`
 	AnthropicEndpoint     string            `env:"ANTHROPIC_ENDPOINT" validate:"omitempty,url"`
 	Temperature           float64           `env:"LLM_TEMPERATURE" envDefault:"0.7" validate:"gte=0,lte=1"`
-	// TemperatureSet reports that Temperature was configured (SetTemperature
-	// or LLM_TEMPERATURE) rather than left at its default; a provider whose
-	// models may reject a non-default value sends it only then.
-	TemperatureSet bool
+	TemperatureSet        bool              // Temperature was configured (SetTemperature, LLM_TEMPERATURE), not defaulted
 	MaxTokens             int               `env:"LLM_MAX_TOKENS" envDefault:"100"`
 	TopP                  float64           `env:"LLM_TOP_P" envDefault:"0.9" validate:"gte=0,lte=1"`
 	FrequencyPenalty      float64           `env:"LLM_FREQUENCY_PENALTY" envDefault:"0.0"`
