@@ -200,10 +200,6 @@ func (l *LLMImpl) generate(ctx context.Context, prompt *Prompt, opts ...Generate
 	for _, opt := range opts {
 		opt(config)
 	}
-	// Set the system prompt in the LLM's options
-	if prompt.SystemPrompt != "" {
-		l.SetOption("system_prompt", prompt.SystemPrompt)
-	}
 	var lastErr error
 	for attempt := 0; attempt <= l.MaxRetries; attempt++ {
 		l.logger.Debug("Generating text", "provider", l.Provider.Name(), "prompt", prompt.String(), "system_prompt", prompt.SystemPrompt, "attempt", attempt+1)
@@ -247,6 +243,13 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 	}
 	l.optionsMutex.RUnlock()
 
+	// Per-call values live in this copy only: written to the shared map, an
+	// overlapping call with another system prompt would send that one instead.
+	if prompt.SystemPrompt != "" {
+		options["system_prompt"] = prompt.SystemPrompt
+	}
+	input := l.promptText(prompt)
+
 	// Add Tools and ToolChoice to options
 	if len(prompt.Tools) > 0 {
 		options["tools"] = prompt.Tools
@@ -282,16 +285,16 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 			} else {
 				l.logger.Warn("Invalid structured_messages format", "type", fmt.Sprintf("%T", structuredMessages))
 				// Fall back to regular prepare
-				reqBody, err = l.Provider.PrepareRequest(prompt.String(), options)
+				reqBody, err = l.Provider.PrepareRequest(input, options)
 			}
 		} else {
 			l.logger.Debug("Provider does not support structured messages API", "provider", l.Provider.Name())
 			// Provider doesn't support structured messages, fall back to normal request
-			reqBody, err = l.Provider.PrepareRequest(prompt.String(), options)
+			reqBody, err = l.Provider.PrepareRequest(input, options)
 		}
 	} else {
 		// Standard request preparation
-		reqBody, err = l.Provider.PrepareRequest(prompt.String(), options)
+		reqBody, err = l.Provider.PrepareRequest(input, options)
 	}
 
 	if err != nil {
@@ -364,6 +367,20 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 	}
 	l.logger.Debug("Text generated successfully", "result", result)
 	return &Response{Content: result, Usage: usageFromResponseMap(fullResponse)}, nil
+}
+
+// promptText renders the prompt for the request's user content. A provider
+// that places options["system_prompt"] in a system slot of its own gets the
+// text without it, so the system prompt is sent once.
+func (l *LLMImpl) promptText(prompt *Prompt) string {
+	placer, ok := l.Provider.(providers.SystemPromptPlacer)
+	if !ok || !placer.PlacesSystemPrompt() || prompt.SystemPrompt == "" {
+		return prompt.String()
+	}
+	userOnly := *prompt
+	userOnly.SystemPrompt = ""
+	userOnly.SystemCacheType = ""
+	return userOnly.String()
 }
 
 // usageFromResponseMap extracts token usage from a decoded provider response.

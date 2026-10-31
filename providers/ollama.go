@@ -119,6 +119,12 @@ func (p *OllamaProvider) SupportsJSONSchema() bool {
 	return false
 }
 
+// PlacesSystemPrompt reports that the system prompt is sent in Ollama's
+// system field (SystemPromptPlacer).
+func (p *OllamaProvider) PlacesSystemPrompt() bool {
+	return true
+}
+
 // Headers returns the HTTP headers required for Ollama API requests.
 // This includes content type and any custom headers.
 func (p *OllamaProvider) Headers() map[string]string {
@@ -169,7 +175,14 @@ func (p *OllamaProvider) PrepareRequest(prompt string, options map[string]interf
 		delete(options, "images")
 	}
 
+	if systemPrompt, ok := options["system_prompt"].(string); ok && systemPrompt != "" {
+		requestBody["system"] = systemPrompt
+	}
+
 	for k, v := range options {
+		if k == "system_prompt" {
+			continue
+		}
 		requestBody[k] = v
 	}
 

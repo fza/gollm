@@ -114,6 +114,12 @@ func (p *AnthropicProvider) SupportsJSONSchema() bool {
 	return true
 }
 
+// PlacesSystemPrompt reports that the system prompt is sent as system blocks
+// (SystemPromptPlacer).
+func (p *AnthropicProvider) PlacesSystemPrompt() bool {
+	return true
+}
+
 // Headers returns the required HTTP headers for Anthropic API requests.
 // This includes:
 //   - x-api-key: API key for authentication

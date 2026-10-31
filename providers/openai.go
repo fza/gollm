@@ -162,6 +162,12 @@ func (p *OpenAIProvider) SupportsJSONSchema() bool {
 	return true
 }
 
+// PlacesSystemPrompt reports that the system prompt is sent as a system
+// message (SystemPromptPlacer).
+func (p *OpenAIProvider) PlacesSystemPrompt() bool {
+	return true
+}
+
 // Headers returns the required HTTP headers for OpenAI API requests.
 // This includes:
 //   - Authorization: Bearer token using the API key
