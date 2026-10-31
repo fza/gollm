@@ -17,3 +17,17 @@ func chatCompletionsURL(endpoint string) string {
 	}
 	return endpoint + "/chat/completions"
 }
+
+// messagesURL normalizes a configured endpoint into an Anthropic Messages API
+// URL the same way: host, versioned base URL, or full path.
+// Accepts: http://host:port, http://host:port/v1, http://host:port/v1/messages
+func messagesURL(endpoint string) string {
+	endpoint = strings.TrimSuffix(endpoint, "/")
+	if strings.HasSuffix(endpoint, "/messages") {
+		return endpoint
+	}
+	if !strings.HasSuffix(endpoint, "/v1") {
+		endpoint += "/v1"
+	}
+	return endpoint + "/messages"
+}

@@ -19,6 +19,7 @@ import (
 type AnthropicProvider struct {
 	apiKey       string                 // API key for authentication
 	model        string                 // Model identifier (e.g., "claude-3-opus", "claude-3-sonnet")
+	endpoint     string                 // Base URL of a Messages API service; empty means Anthropic
 	extraHeaders map[string]string      // Additional HTTP headers
 	options      map[string]interface{} // Model-specific options
 	logger       utils.Logger           // Logger instance
@@ -81,6 +82,16 @@ func (p *AnthropicProvider) SetDefaultOptions(config *config.Config) {
 	if config.Seed != nil {
 		p.SetOption("seed", *config.Seed)
 	}
+	if config.AnthropicEndpoint != "" {
+		p.SetEndpoint(config.AnthropicEndpoint)
+	}
+}
+
+// SetEndpoint configures the base URL of a service speaking the Anthropic
+// Messages API, such as a gateway; Endpoint appends the messages path to it.
+// Empty restores the public Anthropic endpoint.
+func (p *AnthropicProvider) SetEndpoint(endpoint string) {
+	p.endpoint = endpoint
 }
 
 // Name returns "anthropic" as the provider identifier.
@@ -88,10 +99,13 @@ func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
-// Endpoint returns the Anthropic API endpoint URL.
-// For API version 2024-02-15, this is "https://api.anthropic.com/v1/messages".
+// Endpoint returns the Messages API URL: the public Anthropic one, or the
+// configured base URL with the same path appended.
 func (p *AnthropicProvider) Endpoint() string {
-	return "https://api.anthropic.com/v1/messages"
+	if p.endpoint == "" {
+		return "https://api.anthropic.com/v1/messages"
+	}
+	return messagesURL(p.endpoint)
 }
 
 // SupportsJSONSchema indicates that Anthropic supports structured output

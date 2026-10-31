@@ -57,6 +57,7 @@ type Config struct {
 	OllamaEndpoint        string            `env:"OLLAMA_ENDPOINT" envDefault:"http://localhost:11434"`
 	VLLMEndpoint          string            `env:"VLLM_ENDPOINT" envDefault:"http://localhost:8000"`
 	OpenAIEndpoint        string            `env:"OPENAI_ENDPOINT" validate:"omitempty,url"`
+	AnthropicEndpoint     string            `env:"ANTHROPIC_ENDPOINT" validate:"omitempty,url"`
 	Temperature           float64           `env:"LLM_TEMPERATURE" envDefault:"0.7" validate:"gte=0,lte=1"`
 	MaxTokens             int               `env:"LLM_MAX_TOKENS" envDefault:"100"`
 	TopP                  float64           `env:"LLM_TOP_P" envDefault:"0.9" validate:"gte=0,lte=1"`
@@ -204,6 +205,14 @@ func SetVLLMEndpoint(endpoint string) ConfigOption {
 func SetOpenAIEndpoint(endpoint string) ConfigOption {
 	return func(c *Config) {
 		c.OpenAIEndpoint = endpoint
+	}
+}
+
+// SetAnthropicEndpoint sets the base URL of a service speaking the Anthropic
+// Messages API, such as a gateway. Empty keeps the public Anthropic endpoint.
+func SetAnthropicEndpoint(endpoint string) ConfigOption {
+	return func(c *Config) {
+		c.AnthropicEndpoint = endpoint
 	}
 }
 
