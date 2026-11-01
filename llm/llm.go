@@ -413,6 +413,9 @@ func usageFromResponseMap(full map[string]interface{}) *Usage {
 			CacheCreationInputTokens: geti(raw, "cache_creation_input_tokens"),
 			CacheReadInputTokens:     geti(raw, "cache_read_input_tokens"),
 		}
+		if cost, ok := raw["cost"].(float64); ok {
+			u.CostUSD = cost
+		}
 		// OpenAI reports automatic prompt-cache hits nested under
 		// prompt_tokens_details.cached_tokens instead of a top-level field.
 		if u.CacheReadInputTokens == 0 {

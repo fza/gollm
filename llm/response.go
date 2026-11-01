@@ -31,6 +31,10 @@ type Usage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+
+	// CostUSD is the call's cost as the provider reports it in the usage
+	// object (a gateway such as Opper does); zero when none is reported.
+	CostUSD float64 `json:"cost"`
 }
 
 // HasToolCalls returns true if the response contains tool calls.
