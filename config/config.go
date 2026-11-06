@@ -57,7 +57,9 @@ type Config struct {
 	OllamaEndpoint        string            `env:"OLLAMA_ENDPOINT" envDefault:"http://localhost:11434"`
 	VLLMEndpoint          string            `env:"VLLM_ENDPOINT" envDefault:"http://localhost:8000"`
 	OpenAIEndpoint        string            `env:"OPENAI_ENDPOINT" validate:"omitempty,url"`
+	AnthropicEndpoint     string            `env:"ANTHROPIC_ENDPOINT" validate:"omitempty,url"`
 	Temperature           float64           `env:"LLM_TEMPERATURE" envDefault:"0.7" validate:"gte=0,lte=1"`
+	TemperatureSet        bool              // Temperature was configured (SetTemperature, LLM_TEMPERATURE), not defaulted
 	MaxTokens             int               `env:"LLM_MAX_TOKENS" envDefault:"100"`
 	TopP                  float64           `env:"LLM_TOP_P" envDefault:"0.9" validate:"gte=0,lte=1"`
 	FrequencyPenalty      float64           `env:"LLM_FREQUENCY_PENALTY" envDefault:"0.0"`
@@ -107,6 +109,7 @@ func LoadConfig() (*Config, error) {
 	if err := env.Parse(cfg); err != nil {
 		return nil, err
 	}
+	_, cfg.TemperatureSet = os.LookupEnv("LLM_TEMPERATURE")
 
 	loadAPIKeys(cfg)
 	return cfg, nil
@@ -207,10 +210,19 @@ func SetOpenAIEndpoint(endpoint string) ConfigOption {
 	}
 }
 
+// SetAnthropicEndpoint sets the base URL of a service speaking the Anthropic
+// Messages API, such as a gateway. Empty keeps the public Anthropic endpoint.
+func SetAnthropicEndpoint(endpoint string) ConfigOption {
+	return func(c *Config) {
+		c.AnthropicEndpoint = endpoint
+	}
+}
+
 // SetTemperature sets the generation temperature.
 func SetTemperature(temperature float64) ConfigOption {
 	return func(c *Config) {
 		c.Temperature = temperature
+		c.TemperatureSet = true
 	}
 }
 

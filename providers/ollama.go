@@ -113,10 +113,16 @@ func (p *OllamaProvider) SetDefaultOptions(config *config.Config) {
 	p.SetOption("tfs_z", config.TfsZ)
 }
 
-// SupportsJSONSchema indicates whether this provider supports JSON schema validation.
-// Currently, Ollama does not natively support JSON schema validation.
+// SupportsJSONSchema reports that Ollama constrains a response to a JSON
+// schema natively, through the format field.
 func (p *OllamaProvider) SupportsJSONSchema() bool {
-	return false
+	return true
+}
+
+// PlacesSystemPrompt reports that the system prompt is sent in Ollama's
+// system field (SystemPromptPlacer).
+func (p *OllamaProvider) PlacesSystemPrompt() bool {
+	return true
 }
 
 // Headers returns the HTTP headers required for Ollama API requests.
@@ -147,6 +153,12 @@ func (p *OllamaProvider) Headers() map[string]string {
 //   - Serialized JSON request body
 //   - Any error encountered during preparation
 func (p *OllamaProvider) PrepareRequest(prompt string, options map[string]interface{}) ([]byte, error) {
+	return json.Marshal(p.requestBody(prompt, options))
+}
+
+// requestBody builds the generate request PrepareRequest and
+// PrepareRequestWithSchema send.
+func (p *OllamaProvider) requestBody(prompt string, options map[string]interface{}) map[string]interface{} {
 	requestBody := map[string]interface{}{
 		"model":  p.model,
 		"prompt": prompt,
@@ -169,20 +181,30 @@ func (p *OllamaProvider) PrepareRequest(prompt string, options map[string]interf
 		delete(options, "images")
 	}
 
+	if systemPrompt, ok := options["system_prompt"].(string); ok && systemPrompt != "" {
+		requestBody["system"] = systemPrompt
+	}
+
 	for k, v := range options {
+		if k == "system_prompt" {
+			continue
+		}
 		requestBody[k] = v
 	}
 
-	return json.Marshal(requestBody)
+	return requestBody
 }
 
-// PrepareRequestWithSchema creates a request with JSON schema validation.
-// Since Ollama doesn't support schema validation natively, this falls back to
-// standard request preparation.
+// PrepareRequestWithSchema creates the request PrepareRequest does,
+// constrained to the schema through Ollama's format field.
 func (p *OllamaProvider) PrepareRequestWithSchema(prompt string, options map[string]interface{}, schema interface{}) ([]byte, error) {
-	// Ollama doesn't support JSON schema validation natively
-	// We'll just use the regular PrepareRequest method
-	return p.PrepareRequest(prompt, options)
+	raw, err := rawSchema(schema)
+	if err != nil {
+		return nil, err
+	}
+	requestBody := p.requestBody(prompt, options)
+	requestBody["format"] = raw
+	return json.Marshal(requestBody)
 }
 
 // ParseResponse extracts the generated text from the Ollama API response.

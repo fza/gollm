@@ -225,6 +225,39 @@ func TestValidateOpenAIAPIKeyAgainstCustomEndpoint(t *testing.T) {
 	}
 }
 
+// TestValidateAnthropicAPIKeyAgainstCustomEndpoint covers the keys a Messages
+// API gateway issues: Anthropic's own sk-ant- format is required only while
+// requests actually go to Anthropic.
+func TestValidateAnthropicAPIKeyAgainstCustomEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		apiKey   string
+		wantErr  bool
+	}{
+		{name: "anthropic key without endpoint", apiKey: "sk-ant-aaaaaaaaaaaaaaaaaaaa", wantErr: false},
+		{name: "foreign key without endpoint is rejected", apiKey: "op-notarealkeyaaaaaaaaaa", wantErr: true},
+		{name: "foreign key with endpoint is accepted", endpoint: "https://gateway.example/compat", apiKey: "op-notarealkeyaaaaaaaaaa", wantErr: false},
+		{name: "empty key stays rejected with endpoint", endpoint: "https://gateway.example/compat", apiKey: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Provider:          "anthropic",
+				Model:             "claude-sonnet-5",
+				AnthropicEndpoint: tt.endpoint,
+				APIKeys:           map[string]string{"anthropic": tt.apiKey},
+			}
+
+			err := Validate(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestValidateOpenAIAPIKeyWithoutEndpointField guards the key check against a
 // struct that has no OpenAIEndpoint field: reflect yields an invalid Value
 // whose String() is non-empty, which would read as a configured endpoint and

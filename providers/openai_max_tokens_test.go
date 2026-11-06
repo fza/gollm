@@ -16,10 +16,9 @@ func TestNoOutputCapWhenMaxTokensUnset(t *testing.T) {
 	testCases := []struct {
 		description string
 		model       string
-		capKey      string
 	}{
-		{"max_tokens model", "glm-5.3-flash", "max_tokens"},
-		{"max_completion_tokens model", "gpt-5", "max_completion_tokens"},
+		{"gateway model", "glm-5.3-flash"},
+		{"reasoning model", "gpt-5"},
 	}
 
 	for _, tc := range testCases {
@@ -34,7 +33,10 @@ func TestNoOutputCapWhenMaxTokensUnset(t *testing.T) {
 				var req map[string]interface{}
 				assert.NoError(t, json.Unmarshal(body, &req))
 
-				capValue, sent := req[tc.capKey]
+				_, legacySent := req["max_tokens"]
+				assert.False(t, legacySent, "the cap should never go out under its legacy name")
+
+				capValue, sent := req["max_completion_tokens"]
 				if maxTokens == 0 {
 					assert.False(t, sent, "no output cap should be sent")
 					continue

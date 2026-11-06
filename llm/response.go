@@ -55,6 +55,10 @@ type Usage struct {
 	// from providers that bill per reply (melious.ai reports energy and
 	// credits). Kept raw because its fields and units are the provider's own.
 	BillingCost json.RawMessage `json:"billing_cost,omitempty"`
+
+	// CostUSD is the call's cost as the provider reports it in the usage
+	// object (a gateway such as Opper does); zero when none is reported.
+	CostUSD float64 `json:"cost"`
 }
 
 // HasToolCalls returns true if the response contains tool calls.

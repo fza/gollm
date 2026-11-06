@@ -9,95 +9,60 @@ import (
 	"github.com/teilomillet/gollm/config"
 )
 
-// TestNeedsMaxCompletionTokens verifies that the needsMaxCompletionTokens function
-// correctly identifies models that require max_completion_tokens instead of max_tokens
-func TestNeedsMaxCompletionTokens(t *testing.T) {
-	testCases := []struct {
-		modelName      string
-		expectedResult bool
-		description    string
-	}{
-		{"gpt-4", false, "Standard GPT-4 model should not use max_completion_tokens"},
-		{"gpt-4-turbo", false, "GPT-4 Turbo model should not use max_completion_tokens"},
-		{"gpt-3.5-turbo", false, "GPT-3.5 Turbo model should not use max_completion_tokens"},
-		{"o1-preview", true, "o1-preview model should use max_completion_tokens"},
-		{"o-preview", true, "o-preview model should use max_completion_tokens"},
-		{"gpt-4o", true, "GPT-4o model should use max_completion_tokens"},
-		{"gpt-4o-mini", true, "GPT-4o mini model should use max_completion_tokens"},
-		{"gpt-5", true, "GPT-5 model should use max_completion_tokens"},
-		{"gpt-5-mini", true, "GPT-5 mini model should use max_completion_tokens"},
-		{"gpt-5.4-2026-03-05", true, "Dated GPT-5 model should use max_completion_tokens"},
-	}
+// TestTokenBudgetSentAsMaxCompletionTokens verifies that every request path
+// carries the token budget as max_completion_tokens and never max_tokens,
+// whatever the model is called: reasoning models reject max_tokens with HTTP
+// 400, and a gateway's model names (openai/gpt-5-mini, anthropic/...) defeat
+// any prefix table.
+func TestTokenBudgetSentAsMaxCompletionTokens(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
+	for _, model := range []string{"gpt-4", "gpt-4o-mini", "o1-preview", "gpt-5.4-2026-03-05", "openai/gpt-5-mini", "anthropic/claude-sonnet-4-6"} {
+		for name, prepare := range map[string]func(p *OpenAIProvider, opts map[string]interface{}) ([]byte, error){
+			"PrepareRequest": func(p *OpenAIProvider, opts map[string]interface{}) ([]byte, error) {
+				return p.PrepareRequest("hello", opts)
+			},
+			"PrepareRequestWithSchema": func(p *OpenAIProvider, opts map[string]interface{}) ([]byte, error) {
+				return p.PrepareRequestWithSchema("hello", opts, schema)
+			},
+			"PrepareStreamRequest": func(p *OpenAIProvider, opts map[string]interface{}) ([]byte, error) {
+				return p.PrepareStreamRequest("hello", opts)
+			},
+		} {
+			t.Run(model+"/"+name, func(t *testing.T) {
+				provider := NewOpenAIProvider("fake-api-key", model, nil).(*OpenAIProvider)
+				provider.SetDefaultOptions(&config.Config{MaxTokens: 4096})
 
-	for _, tc := range testCases {
-		t.Run(tc.description, func(t *testing.T) {
-			// Create a provider with the test model
-			provider := NewOpenAIProvider("fake-api-key", tc.modelName, nil)
+				body, err := prepare(provider, map[string]interface{}{"max_tokens": 2048})
+				assert.NoError(t, err)
 
-			// Get the OpenAIProvider concrete type from the Provider interface
-			openAIProvider, ok := provider.(*OpenAIProvider)
-			assert.True(t, ok, "Provider should be of type *OpenAIProvider")
-
-			// Test the needsMaxCompletionTokens function
-			result := openAIProvider.needsMaxCompletionTokens()
-			assert.Equal(t, tc.expectedResult, result, "needsMaxCompletionTokens returned unexpected result for model %s", tc.modelName)
-		})
+				var req map[string]interface{}
+				assert.NoError(t, json.Unmarshal(body, &req))
+				_, hasMaxTokens := req["max_tokens"]
+				assert.False(t, hasMaxTokens, "max_tokens must not be sent")
+				assert.Equal(t, float64(2048), req["max_completion_tokens"], "the per-call budget must survive as max_completion_tokens")
+			})
+		}
 	}
 }
 
-// TestPrepareRequestGPT5UsesMaxCompletionTokens verifies that a gpt-5 request
-// carries max_completion_tokens and never max_tokens — the parameter gpt-5-class
-// models reject with HTTP 400.
-func TestPrepareRequestGPT5UsesMaxCompletionTokens(t *testing.T) {
-	provider, ok := NewOpenAIProvider("fake-api-key", "gpt-5.4-2026-03-05", nil).(*OpenAIProvider)
-	assert.True(t, ok, "Provider should be of type *OpenAIProvider")
+// TestTemperatureSentOnlyWhenConfigured verifies that the config's default
+// temperature stays out of the request — reasoning models reject any value
+// but their own default — while a configured one is sent to every model.
+func TestTemperatureSentOnlyWhenConfigured(t *testing.T) {
+	for _, model := range []string{"gpt-4o", "gpt-5.6-luna", "openai/gpt-5-mini"} {
+		t.Run(model, func(t *testing.T) {
+			defaults := NewOpenAIProvider("fake-api-key", model, nil).(*OpenAIProvider)
+			defaults.SetDefaultOptions(&config.Config{Temperature: 0.7, MaxTokens: 4096})
+			configured := NewOpenAIProvider("fake-api-key", model, nil).(*OpenAIProvider)
+			configured.SetDefaultOptions(&config.Config{Temperature: 0.2, TemperatureSet: true, MaxTokens: 4096})
 
-	body, err := provider.PrepareRequest("hello", map[string]interface{}{"max_tokens": 4096})
-	assert.NoError(t, err)
-
-	var req map[string]interface{}
-	assert.NoError(t, json.Unmarshal(body, &req))
-
-	_, hasMaxTokens := req["max_tokens"]
-	maxCompletion, hasMaxCompletion := req["max_completion_tokens"]
-	assert.False(t, hasMaxTokens, "gpt-5 request must not send max_tokens (OpenAI rejects it with HTTP 400)")
-	assert.True(t, hasMaxCompletion, "gpt-5 request must send max_completion_tokens instead")
-	assert.Equal(t, float64(4096), maxCompletion, "token budget must be preserved across the conversion")
-}
-
-// TestDefaultTemperatureSkippedForReasoningModels verifies that the configured
-// default temperature is not sent to reasoning models (o-series, gpt-5.x) —
-// they reject any non-default temperature with HTTP 400 — while gpt-4-class
-// models keep receiving it.
-func TestDefaultTemperatureSkippedForReasoningModels(t *testing.T) {
-	testCases := []struct {
-		modelName      string
-		expectedResult bool
-		description    string
-	}{
-		{"gpt-4", true, "GPT-4 accepts temperature"},
-		{"gpt-4o", true, "GPT-4o accepts temperature"},
-		{"gpt-3.5-turbo", true, "GPT-3.5 Turbo accepts temperature"},
-		{"o1-preview", false, "o1 rejects non-default temperature"},
-		{"gpt-5", false, "GPT-5 rejects non-default temperature"},
-		{"gpt-5.6-luna", false, "GPT-5.6 Luna rejects non-default temperature"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.description, func(t *testing.T) {
-			provider, ok := NewOpenAIProvider("fake-api-key", tc.modelName, nil).(*OpenAIProvider)
-			assert.True(t, ok, "Provider should be of type *OpenAIProvider")
-
-			provider.SetDefaultOptions(&config.Config{Temperature: 0.7, MaxTokens: 4096})
-
-			body, err := provider.PrepareRequest("hello", nil)
-			assert.NoError(t, err)
-
-			var req map[string]interface{}
-			assert.NoError(t, json.Unmarshal(body, &req))
-
-			_, hasTemperature := req["temperature"]
-			assert.Equal(t, tc.expectedResult, hasTemperature, "temperature presence unexpected for model %s", tc.modelName)
+			for provider, want := range map[*OpenAIProvider]interface{}{defaults: nil, configured: 0.2} {
+				body, err := provider.PrepareRequest("hello", nil)
+				assert.NoError(t, err)
+				var req map[string]interface{}
+				assert.NoError(t, json.Unmarshal(body, &req))
+				assert.Equal(t, want, req["temperature"])
+			}
 		})
 	}
 }

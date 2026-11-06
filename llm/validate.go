@@ -96,18 +96,28 @@ func validateAPIKey(fl validator.FieldLevel) bool {
 	switch provider {
 	case "openai":
 		// A configured base URL means the request does not go to OpenAI, so
-		// OpenAI's key format says nothing about the key's validity. A struct
-		// without the field yields an invalid Value, whose String() is
-		// non-empty — check the kind, or a missing field waves any key through.
-		if endpoint := parent.FieldByName("OpenAIEndpoint"); endpoint.Kind() == reflect.String && endpoint.String() != "" {
+		// OpenAI's key format says nothing about the key's validity.
+		if hasEndpoint(parent, "OpenAIEndpoint") {
 			return true
 		}
 		return strings.HasPrefix(apiKey, "sk-") && len(apiKey) > 20
 	case "anthropic":
+		if hasEndpoint(parent, "AnthropicEndpoint") {
+			return true
+		}
 		return strings.HasPrefix(apiKey, "sk-ant-") && len(apiKey) > 20
 	default:
 		return len(apiKey) > 20 // Generic validation for unknown providers
 	}
+}
+
+// hasEndpoint reports whether the struct carries a non-empty base URL in the
+// named field. A struct without the field yields an invalid Value, whose
+// String() is non-empty — check the kind, or a missing field waves any key
+// through.
+func hasEndpoint(parent reflect.Value, field string) bool {
+	endpoint := parent.FieldByName(field)
+	return endpoint.Kind() == reflect.String && endpoint.String() != ""
 }
 
 // Validate checks if the given struct is valid according to its validation rules.

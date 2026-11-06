@@ -76,12 +76,13 @@ var (
 // to modify configuration settings.
 var (
 	// Provider configuration
-	SetProvider       = config.SetProvider       // Sets the LLM provider (e.g., "openai", "anthropic")
-	SetModel          = config.SetModel          // Sets the model name for the selected provider
-	SetOllamaEndpoint = config.SetOllamaEndpoint // Sets the endpoint URL for Ollama local deployment
-	SetVLLMEndpoint   = config.SetVLLMEndpoint   // Sets the endpoint URL for vLLM local deployment
-	SetOpenAIEndpoint = config.SetOpenAIEndpoint // Sets the base URL of an OpenAI-compatible service
-	SetAPIKey         = config.SetAPIKey         // Sets the API key for the current provider
+	SetProvider          = config.SetProvider          // Sets the LLM provider (e.g., "openai", "anthropic")
+	SetModel             = config.SetModel             // Sets the model name for the selected provider
+	SetOllamaEndpoint    = config.SetOllamaEndpoint    // Sets the endpoint URL for Ollama local deployment
+	SetVLLMEndpoint      = config.SetVLLMEndpoint      // Sets the endpoint URL for vLLM local deployment
+	SetOpenAIEndpoint    = config.SetOpenAIEndpoint    // Sets the base URL of an OpenAI-compatible service
+	SetAnthropicEndpoint = config.SetAnthropicEndpoint // Sets the base URL of an Anthropic Messages API service
+	SetAPIKey            = config.SetAPIKey            // Sets the API key for the current provider
 
 	// Generation parameters
 	SetTemperature      = config.SetTemperature      // Controls randomness in generation (0.0-1.0)

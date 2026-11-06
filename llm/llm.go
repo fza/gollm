@@ -86,7 +86,8 @@ type GenerateOption func(*GenerateConfig)
 
 // GenerateConfig holds configuration options for text generation.
 type GenerateConfig struct {
-	UseJSONSchema bool // Whether to use JSON schema validation
+	UseJSONSchema  bool        // Whether to use JSON schema validation
+	ResponseSchema interface{} // JSON schema the response must conform to (WithResponseSchema)
 }
 
 // NewLLM creates a new LLM instance with the specified configuration.
@@ -200,15 +201,14 @@ func (l *LLMImpl) generate(ctx context.Context, prompt *Prompt, opts ...Generate
 	for _, opt := range opts {
 		opt(config)
 	}
-	// Set the system prompt in the LLM's options
-	if prompt.SystemPrompt != "" {
-		l.SetOption("system_prompt", prompt.SystemPrompt)
+	if config.ResponseSchema != nil && !l.Provider.SupportsJSONSchema() {
+		return nil, NewLLMError(ErrorTypeUnsupported, fmt.Sprintf("provider %s cannot enforce a response schema", l.Provider.Name()), nil)
 	}
 	var lastErr error
 	for attempt := 0; attempt <= l.MaxRetries; attempt++ {
 		l.logger.Debug("Generating text", "provider", l.Provider.Name(), "prompt", prompt.String(), "system_prompt", prompt.SystemPrompt, "attempt", attempt+1)
 		// Pass the entire Prompt struct to attemptGenerate
-		resp, err := l.attemptGenerate(ctx, prompt)
+		resp, err := l.attemptGenerate(ctx, prompt, config.ResponseSchema)
 		if err == nil {
 			return resp, nil
 		}
@@ -236,7 +236,7 @@ func (l *LLMImpl) generate(ctx context.Context, prompt *Prompt, opts ...Generate
 //   - ErrorTypeAPI for provider API errors
 //   - ErrorTypeResponse for response processing issues
 //   - ErrorTypeRateLimit if provider rate limit is exceeded
-func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Response, error) {
+func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt, responseSchema interface{}) (*Response, error) {
 	// Create a new options map that includes both l.Options and prompt-specific options
 	options := make(map[string]interface{})
 
@@ -246,6 +246,13 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 		options[k] = v
 	}
 	l.optionsMutex.RUnlock()
+
+	// Per-call values live in this copy only: written to the shared map, an
+	// overlapping call with another system prompt would send that one instead.
+	if prompt.SystemPrompt != "" {
+		options["system_prompt"] = prompt.SystemPrompt
+	}
+	input := l.promptText(prompt)
 
 	// Add Tools and ToolChoice to options
 	if len(prompt.Tools) > 0 {
@@ -269,7 +276,9 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 	l.optionsMutex.RUnlock()
 
 	// Check if we have structured messages
-	if hasStructuredMessages {
+	if responseSchema != nil {
+		reqBody, err = l.Provider.PrepareRequestWithSchema(input, options, responseSchema)
+	} else if hasStructuredMessages {
 		// Use the structured messages API if the provider supports it
 		if prepareWithMessages, ok := l.Provider.(interface {
 			PrepareRequestWithMessages(messages []types.MemoryMessage, options map[string]interface{}) ([]byte, error)
@@ -282,16 +291,16 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt) (*Respons
 			} else {
 				l.logger.Warn("Invalid structured_messages format", "type", fmt.Sprintf("%T", structuredMessages))
 				// Fall back to regular prepare
-				reqBody, err = l.Provider.PrepareRequest(prompt.String(), options)
+				reqBody, err = l.Provider.PrepareRequest(input, options)
 			}
 		} else {
 			l.logger.Debug("Provider does not support structured messages API", "provider", l.Provider.Name())
 			// Provider doesn't support structured messages, fall back to normal request
-			reqBody, err = l.Provider.PrepareRequest(prompt.String(), options)
+			reqBody, err = l.Provider.PrepareRequest(input, options)
 		}
 	} else {
 		// Standard request preparation
-		reqBody, err = l.Provider.PrepareRequest(prompt.String(), options)
+		reqBody, err = l.Provider.PrepareRequest(input, options)
 	}
 
 	if err != nil {
@@ -419,6 +428,20 @@ func billingCostFromBody(body []byte) json.RawMessage {
 	return envelope.BillingCost
 }
 
+// promptText renders the prompt for the request's user content. A provider
+// that places options["system_prompt"] in a system slot of its own gets the
+// text without it, so the system prompt is sent once.
+func (l *LLMImpl) promptText(prompt *Prompt) string {
+	placer, ok := l.Provider.(providers.SystemPromptPlacer)
+	if !ok || !placer.PlacesSystemPrompt() || prompt.SystemPrompt == "" {
+		return prompt.String()
+	}
+	userOnly := *prompt
+	userOnly.SystemPrompt = ""
+	userOnly.SystemCacheType = ""
+	return userOnly.String()
+}
+
 // usageFromResponseMap extracts token usage from a decoded provider response.
 // It reads the OpenAI-style (prompt/completion/total) and Anthropic-style
 // (input/output plus cache read/creation) names from a usage object, and
@@ -442,6 +465,9 @@ func usageFromResponseMap(full map[string]interface{}) *Usage {
 			OutputTokens:             geti(raw, "output_tokens"),
 			CacheCreationInputTokens: geti(raw, "cache_creation_input_tokens"),
 			CacheReadInputTokens:     geti(raw, "cache_read_input_tokens"),
+		}
+		if cost, ok := raw["cost"].(float64); ok {
+			u.CostUSD = cost
 		}
 		// OpenAI reports automatic prompt-cache hits nested under
 		// prompt_tokens_details.cached_tokens instead of a top-level field.

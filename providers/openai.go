@@ -62,74 +62,38 @@ func (p *OpenAIProvider) SetLogger(logger utils.Logger) {
 	p.logger = logger
 }
 
-// needsMaxCompletionTokens checks if the model requires max_completion_tokens instead of max_tokens
-func (p *OpenAIProvider) needsMaxCompletionTokens() bool {
-	// Check for models that start with "o"
-	if strings.HasPrefix(p.model, "o") {
-		return true
-	}
-
-	// Check for gpt-4o and similar models
-	if strings.Contains(p.model, "4o") || strings.Contains(p.model, "-o") {
-		return true
-	}
-
-	// Check for gpt-5 and newer chat models, which require max_completion_tokens
-	// and reject max_tokens with HTTP 400 (e.g. gpt-5, gpt-5-mini, gpt-5.4-2026-03-05)
-	if strings.HasPrefix(p.model, "gpt-5") {
-		return true
-	}
-
-	return false
-}
-
-// supportsTemperature checks if the model accepts a non-default temperature.
-// Reasoning models (o-series, gpt-5 and newer, e.g. gpt-5.6-luna) reject any
-// value other than the default with HTTP 400, so the configured default must
-// not be sent to them. gpt-4o-class models still accept temperature.
-func (p *OpenAIProvider) supportsTemperature() bool {
-	if strings.HasPrefix(p.model, "o") {
-		return false
-	}
-	if strings.HasPrefix(p.model, "gpt-5") {
-		return false
-	}
-	return true
-}
-
 // SetOption sets a specific option for the OpenAI provider.
 // Supported options include:
 //   - temperature: Controls randomness (0.0 to 2.0)
-//   - max_tokens: Maximum tokens in the response (automatically converted to max_completion_tokens for "o" models)
+//   - max_tokens: Maximum tokens in the response (sent as max_completion_tokens)
 //   - top_p: Nucleus sampling parameter
 //   - frequency_penalty: Repetition reduction
 //   - presence_penalty: Topic steering
 //   - seed: Deterministic sampling seed
 func (p *OpenAIProvider) SetOption(key string, value interface{}) {
-	// Handle max_tokens conversion for "o" models
 	if key == "max_tokens" {
-		if p.needsMaxCompletionTokens() {
-			// For models requiring max_completion_tokens, use that instead
-			key = "max_completion_tokens"
-			// Delete max_tokens if it was previously set
-			delete(p.options, "max_tokens")
-		} else {
-			// For models using max_tokens, make sure max_completion_tokens is not set
-			delete(p.options, "max_completion_tokens")
-		}
-	} else if key == "max_completion_tokens" {
-		// If explicitly setting max_completion_tokens, remove max_tokens to avoid conflicts
-		delete(p.options, "max_tokens")
+		key = "max_completion_tokens"
 	}
-
 	p.options[key] = value
 	p.logger.Debug("Option set", "key", key, "value", value)
 }
 
+// useMaxCompletionTokens sends the token budget as max_completion_tokens,
+// whatever name it arrived under. Reasoning models reject max_tokens, every
+// current chat model accepts max_completion_tokens, and an OpenAI-compatible
+// gateway forwards model names a prefix table cannot know.
+func useMaxCompletionTokens(options map[string]interface{}) {
+	if v, ok := options["max_tokens"]; ok {
+		options["max_completion_tokens"] = v
+		delete(options, "max_tokens")
+	}
+}
+
 // SetDefaultOptions configures standard options from the global configuration.
-// This includes temperature, max tokens, and sampling parameters.
+// The temperature is sent only when configured: reasoning models reject any
+// value but their own default.
 func (p *OpenAIProvider) SetDefaultOptions(config *config.Config) {
-	if p.supportsTemperature() {
+	if config.TemperatureSet {
 		p.SetOption("temperature", config.Temperature)
 	}
 	// No cap at all leaves the model's own output limit in force, which a
@@ -179,6 +143,12 @@ func (p *OpenAIProvider) systemRole() string {
 // SupportsJSONSchema indicates that OpenAI supports native JSON schema validation
 // through its function calling and JSON mode capabilities.
 func (p *OpenAIProvider) SupportsJSONSchema() bool {
+	return true
+}
+
+// PlacesSystemPrompt reports that the system prompt is sent as a system
+// message (SystemPromptPlacer).
+func (p *OpenAIProvider) PlacesSystemPrompt() bool {
 	return true
 }
 
@@ -289,22 +259,7 @@ func (p *OpenAIProvider) PrepareRequest(prompt string, options map[string]interf
 		}
 	}
 
-	// Handle max_tokens/max_completion_tokens conflict
-	// For models that need max_completion_tokens, ensure we use that and not max_tokens
-	if p.needsMaxCompletionTokens() {
-		if _, hasMaxTokens := mergedOptions["max_tokens"]; hasMaxTokens {
-			// Move max_tokens value to max_completion_tokens
-			mergedOptions["max_completion_tokens"] = mergedOptions["max_tokens"]
-			delete(mergedOptions, "max_tokens")
-		}
-	} else {
-		// For other models, ensure we use max_tokens and not max_completion_tokens
-		if _, hasMaxCompletionTokens := mergedOptions["max_completion_tokens"]; hasMaxCompletionTokens {
-			// Move max_completion_tokens value to max_tokens
-			mergedOptions["max_tokens"] = mergedOptions["max_completion_tokens"]
-			delete(mergedOptions, "max_completion_tokens")
-		}
-	}
+	useMaxCompletionTokens(mergedOptions)
 
 	// Add merged options to the request
 	for k, v := range mergedOptions {
@@ -328,36 +283,10 @@ func (p *OpenAIProvider) PrepareRequest(prompt string, options map[string]interf
 func (p *OpenAIProvider) PrepareRequestWithSchema(prompt string, options map[string]interface{}, schema interface{}) ([]byte, error) {
 	p.logger.Debug("Preparing request with schema", "prompt", prompt, "schema", schema)
 
-	// First, ensure we have a proper object for the schema
-	var schemaObj interface{}
-	switch s := schema.(type) {
-	case string:
-		if err := json.Unmarshal([]byte(s), &schemaObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schema string: %w", err)
-		}
-	case []byte:
-		if err := json.Unmarshal(s, &schemaObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schema bytes: %w", err)
-		}
-	case map[string]interface{}:
-		schemaObj = s
-	default:
-		// Try to marshal and unmarshal to ensure we have a proper object
-		schemaBytes, err := json.Marshal(schema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal schema: %w", err)
-		}
-		if err := json.Unmarshal(schemaBytes, &schemaObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
-		}
+	cleanSchema, err := openAISchema(schema)
+	if err != nil {
+		return nil, err
 	}
-
-	// Clean the schema for OpenAI by removing unsupported validation rules
-	cleanSchema := cleanSchemaForOpenAI(schemaObj)
-
-	// Debug log the cleaned schema
-	cleanSchemaJSON, _ := json.MarshalIndent(cleanSchema, "", "  ")
-	p.logger.Debug("Cleaned schema for OpenAI", "schema", string(cleanSchemaJSON))
 
 	request := map[string]interface{}{
 		"model": p.model,
@@ -398,22 +327,7 @@ func (p *OpenAIProvider) PrepareRequestWithSchema(prompt string, options map[str
 		}
 	}
 
-	// Handle max_tokens/max_completion_tokens conflict
-	// For models that need max_completion_tokens, ensure we use that and not max_tokens
-	if p.needsMaxCompletionTokens() {
-		if _, hasMaxTokens := mergedOptions["max_tokens"]; hasMaxTokens {
-			// Move max_tokens value to max_completion_tokens
-			mergedOptions["max_completion_tokens"] = mergedOptions["max_tokens"]
-			delete(mergedOptions, "max_tokens")
-		}
-	} else {
-		// For other models, ensure we use max_tokens and not max_completion_tokens
-		if _, hasMaxCompletionTokens := mergedOptions["max_completion_tokens"]; hasMaxCompletionTokens {
-			// Move max_completion_tokens value to max_tokens
-			mergedOptions["max_tokens"] = mergedOptions["max_completion_tokens"]
-			delete(mergedOptions, "max_completion_tokens")
-		}
-	}
+	useMaxCompletionTokens(mergedOptions)
 
 	// Add merged options to the request
 	for k, v := range mergedOptions {
@@ -428,6 +342,42 @@ func (p *OpenAIProvider) PrepareRequestWithSchema(prompt string, options map[str
 
 	p.logger.Debug("Full request to OpenAI", "request", string(reqJSON))
 	return reqJSON, nil
+}
+
+// openAISchema prepares a schema for strict mode. A json.RawMessage is sent
+// verbatim, so its property order survives; other forms are decoded and
+// cleaned to the subset strict mode accepts.
+func openAISchema(schema interface{}) (interface{}, error) {
+	if raw, ok := schema.(json.RawMessage); ok {
+		return rawSchema(raw)
+	}
+
+	// First, ensure we have a proper object for the schema
+	var schemaObj interface{}
+	switch s := schema.(type) {
+	case string:
+		if err := json.Unmarshal([]byte(s), &schemaObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schema string: %w", err)
+		}
+	case []byte:
+		if err := json.Unmarshal(s, &schemaObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schema bytes: %w", err)
+		}
+	case map[string]interface{}:
+		schemaObj = s
+	default:
+		// Try to marshal and unmarshal to ensure we have a proper object
+		schemaBytes, err := json.Marshal(schema)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal schema: %w", err)
+		}
+		if err := json.Unmarshal(schemaBytes, &schemaObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
+		}
+	}
+
+	// Clean the schema for OpenAI by removing unsupported validation rules
+	return cleanSchemaForOpenAI(schemaObj), nil
 }
 
 // cleanSchemaForOpenAI removes validation rules that OpenAI doesn't support
@@ -578,22 +528,7 @@ func (p *OpenAIProvider) PrepareStreamRequest(prompt string, options map[string]
 		}
 	}
 
-	// Handle max_tokens/max_completion_tokens conflict
-	// For models that need max_completion_tokens, ensure we use that and not max_tokens
-	if p.needsMaxCompletionTokens() {
-		if _, hasMaxTokens := mergedOptions["max_tokens"]; hasMaxTokens {
-			// Move max_tokens value to max_completion_tokens
-			mergedOptions["max_completion_tokens"] = mergedOptions["max_tokens"]
-			delete(mergedOptions, "max_tokens")
-		}
-	} else {
-		// For other models, ensure we use max_tokens and not max_completion_tokens
-		if _, hasMaxCompletionTokens := mergedOptions["max_completion_tokens"]; hasMaxCompletionTokens {
-			// Move max_completion_tokens value to max_tokens
-			mergedOptions["max_tokens"] = mergedOptions["max_completion_tokens"]
-			delete(mergedOptions, "max_completion_tokens")
-		}
-	}
+	useMaxCompletionTokens(mergedOptions)
 
 	// Add merged options to the request
 	for k, v := range mergedOptions {
@@ -760,22 +695,7 @@ func (p *OpenAIProvider) PrepareRequestWithMessages(messages []types.MemoryMessa
 		}
 	}
 
-	// Handle max_tokens/max_completion_tokens conflict
-	// For models that need max_completion_tokens, ensure we use that and not max_tokens
-	if p.needsMaxCompletionTokens() {
-		if _, hasMaxTokens := mergedOptions["max_tokens"]; hasMaxTokens {
-			// Move max_tokens value to max_completion_tokens
-			mergedOptions["max_completion_tokens"] = mergedOptions["max_tokens"]
-			delete(mergedOptions, "max_tokens")
-		}
-	} else {
-		// For other models, ensure we use max_tokens and not max_completion_tokens
-		if _, hasMaxCompletionTokens := mergedOptions["max_completion_tokens"]; hasMaxCompletionTokens {
-			// Move max_completion_tokens value to max_tokens
-			mergedOptions["max_tokens"] = mergedOptions["max_completion_tokens"]
-			delete(mergedOptions, "max_completion_tokens")
-		}
-	}
+	useMaxCompletionTokens(mergedOptions)
 
 	// Add merged options to the request
 	for k, v := range mergedOptions {

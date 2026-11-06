@@ -58,6 +58,22 @@ func TestUsageFromResponseMap(t *testing.T) {
 		t.Errorf("openai cached_tokens not read as cache reads: %+v", u2c)
 	}
 
+	// A gateway that reports the call's dollar cost (Opper) puts it in the
+	// usage object; a provider that reports none leaves it zero.
+	u2o := usageFromResponseMap(map[string]interface{}{
+		"usage": map[string]interface{}{
+			"prompt_tokens":     float64(18),
+			"completion_tokens": float64(21),
+			"cost":              1.2534984e-05,
+		},
+	})
+	if u2o == nil || u2o.CostUSD != 1.2534984e-05 {
+		t.Errorf("reported cost not read: %+v", u2o)
+	}
+	if u2.CostUSD != 0 {
+		t.Errorf("cost invented where none was reported: %+v", u2)
+	}
+
 	// Ollama: counts at the top level of the final streamed object, with no
 	// usage object anywhere.
 	u3 := usageFromResponseMap(map[string]interface{}{

@@ -134,6 +134,10 @@ var (
 	// WithJSONSchemaValidation enables JSON schema validation.
 	WithJSONSchemaValidation = llm.WithJSONSchemaValidation
 
+	// WithResponseSchema constrains the response to a JSON schema through the
+	// provider's native structured output.
+	WithResponseSchema = llm.WithResponseSchema
+
 	// WithStream enables or disables streaming responses.
 	WithStream = config.WithStream
 

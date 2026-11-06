@@ -84,6 +84,14 @@ type Provider interface {
 	ParseStreamResponse(chunk []byte) (string, error)
 }
 
+// SystemPromptPlacer is implemented by providers whose PrepareRequest and
+// PrepareRequestWithSchema place options["system_prompt"] in a system slot of
+// the provider's own request format; the caller then leaves the system prompt
+// out of the prompt text, so it is sent once.
+type SystemPromptPlacer interface {
+	PlacesSystemPrompt() bool
+}
+
 // ProviderType represents the general type of LLM API
 type ProviderType string
 
