@@ -18,25 +18,36 @@ func newOpenAITestLLM(rt http.RoundTripper) *LLMImpl {
 func TestGenerateWithUsageReportsWhyNoAnswerCame(t *testing.T) {
 	testCases := []struct {
 		description string
+		provider    providers.Provider
 		body        string
 		truncated   bool
 	}{
 		{
 			description: "reasoning spent the cap",
+			provider:    providers.NewOpenAIProvider("fake-api-key", "glm-5.3-flash", nil),
 			body:        `{"choices":[{"message":{"content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":900,"completion_tokens":8192,"completion_tokens_details":{"reasoning_tokens":8192}}}`,
 			truncated:   true,
 		},
 		{
 			description: "model stopped without answering",
+			provider:    providers.NewOpenAIProvider("fake-api-key", "glm-5.3-flash", nil),
 			body:        `{"choices":[{"message":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":900,"completion_tokens":4000,"completion_tokens_details":{"reasoning_tokens":4000}}}`,
+		},
+		{
+			description: "parser accepts empty text",
+			provider:    providers.NewVLLMProvider("", "glm-5.3-flash", nil),
+			body:        `{"choices":[{"message":{"content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":900,"completion_tokens":8192,"completion_tokens_details":{"reasoning_tokens":8192}}}`,
+			truncated:   true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			rt := &scriptedRT{steps: []func() (*http.Response, error){resp(200, tc.body)}}
+			l := newTestLLM(rt)
+			l.Provider = tc.provider
 
-			_, err := newOpenAITestLLM(rt).GenerateWithUsage(context.Background(), &Prompt{Input: "hi"})
+			_, err := l.GenerateWithUsage(context.Background(), &Prompt{Input: "hi"})
 
 			var noAnswer *NoAnswerError
 			if !errors.As(err, &noAnswer) {
@@ -52,6 +63,20 @@ func TestGenerateWithUsageReportsWhyNoAnswerCame(t *testing.T) {
 				t.Errorf("a delivered response should not be retried, made %d calls", rt.calls)
 			}
 		})
+	}
+}
+
+func TestGenerateWithUsageReturnsEmptyAnswerWithoutFinishReason(t *testing.T) {
+	rt := &scriptedRT{steps: []func() (*http.Response, error){resp(200, `{"choices":[{"message":{"content":""}}]}`)}}
+	l := newTestLLM(rt)
+	l.Provider = providers.NewVLLMProvider("", "glm-5.3-flash", nil)
+
+	got, err := l.GenerateWithUsage(context.Background(), &Prompt{Input: "hi"})
+	if err != nil {
+		t.Fatalf("an empty answer with no finish reason should be returned as it came, got %v", err)
+	}
+	if got.Content != "" {
+		t.Errorf("the content should stay empty, got %q", got.Content)
 	}
 }
 

@@ -373,6 +373,9 @@ func (l *LLMImpl) attemptGenerate(ctx context.Context, prompt *Prompt, responseS
 	usage := usageFromResponseMap(fullResponse)
 	finishReason := finishReasonFromResponseMap(fullResponse)
 	result, err := l.Provider.ParseResponse(body)
+	if err == nil && result == "" && finishReason != "" {
+		err = errEmptyAnswer
+	}
 	if err != nil {
 		if finishReason != "" {
 			err = &NoAnswerError{FinishReason: finishReason, Usage: usage, Err: err}

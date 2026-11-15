@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -181,6 +182,8 @@ func HandleError(err error, fatal bool, logger utils.Logger) {
 		panic(err)
 	}
 }
+
+var errEmptyAnswer = errors.New("empty answer")
 
 // NoAnswerError reports a response the provider delivered whole that holds no
 // answer the provider could parse: typically a reasoning model that spent the
