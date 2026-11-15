@@ -571,8 +571,8 @@ func (l *LLMImpl) attemptGenerateWithSchema(ctx context.Context, prompt string, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		l.logger.Error("API error", "provider", l.Provider.Name(), "status", resp.StatusCode, "body", string(body))
-		return "", fullPrompt, NewLLMError(ErrorTypeAPI, fmt.Sprintf("API error: status code %d", resp.StatusCode), nil)
+		l.logger.Debug("API error", "provider", l.Provider.Name(), "status", resp.StatusCode, "body", string(body))
+		return "", fullPrompt, classifyAPIError(resp.StatusCode, resp.Header, body)
 	}
 
 	result, err := l.Provider.ParseResponse(body)
@@ -652,8 +652,13 @@ func (l *LLMImpl) Stream(ctx context.Context, prompt *Prompt, opts ...StreamOpti
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		errorBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, NewLLMError(ErrorTypeAPI, fmt.Sprintf("API error: status code %d", resp.StatusCode), nil)
+		if readErr != nil {
+			return nil, NewLLMError(ErrorTypeResponse, "failed to read error response body", readErr)
+		}
+		l.logger.Debug("API error", "provider", l.Provider.Name(), "status", resp.StatusCode, "body", string(errorBody))
+		return nil, classifyAPIError(resp.StatusCode, resp.Header, errorBody)
 	}
 
 	// Create and return stream
